@@ -67,8 +67,11 @@ class EngineCore:
 
         self.log_stats = log_stats
 
+        self.structured_output_manager = StructuredOutputManager(vllm_config)
+
         # Setup Model.
-        self.model_executor = executor_class(vllm_config)
+        self.model_executor = executor_class(vllm_config,
+                                             self.structured_output_manager)
         if executor_fail_callback is not None:
             self.model_executor.register_failure_callback(
                 executor_fail_callback)
@@ -79,8 +82,6 @@ class EngineCore:
 
         vllm_config.cache_config.num_gpu_blocks = num_gpu_blocks
         vllm_config.cache_config.num_cpu_blocks = num_cpu_blocks
-
-        self.structured_output_manager = StructuredOutputManager(vllm_config)
 
         # Setup scheduler.
         if isinstance(vllm_config.scheduler_config.scheduler_cls, str):
@@ -339,6 +340,13 @@ class EngineCore:
                        kwargs: Optional[dict[str, Any]] = None) -> list[_R]:
         return self.model_executor.collective_rpc(method, timeout, args,
                                                   kwargs)
+
+    def save_tensorized_model(
+        self,
+        tensorizer_config,
+    ) -> None:
+        self.model_executor.save_tensorized_model(
+            tensorizer_config=tensorizer_config, )
 
 
 class EngineCoreProc(EngineCore):
@@ -701,7 +709,7 @@ class DPEngineCoreProc(EngineCoreProc):
             for i in range(local_dp_rank * world_size, (local_dp_rank + 1) *
                            world_size))
 
-        self.local_dp_rank = local_dp_rank
+        self.dp_rank = dp_rank
         self.dp_group = vllm_config.parallel_config.stateless_init_dp_group()
         self.current_wave = 0
 
@@ -774,7 +782,7 @@ class DPEngineCoreProc(EngineCoreProc):
                 local_unfinished_reqs)
 
             if not self.engines_running:
-                if self.local_dp_rank == 0:
+                if self.dp_rank == 0:
                     # Notify client that we are pausing the loop.
                     logger.debug("Wave %d finished, pausing engine loop.",
                                  self.current_wave)
